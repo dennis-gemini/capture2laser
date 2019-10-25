@@ -589,7 +589,12 @@ def build_image(original, cropped, label, **options):
     return label, effective, solid, shadowed
 
 
-def save_result(original, cropped, effective, solid, shadowed, label, laser_engraver):
+def save_result(original, cropped, effective, solid, shadowed, label, laser_engraver, **options):
+    auto_scale           = _get_option(options, "auto_scale", True)
+    scale_keep_ratio     = _get_option(options, "scale_keep_ratio", True)
+    scale_max_width      = _get_option(options, "scale_max_width", 90)
+    scale_max_height     = _get_option(options, "scale_max_height", 21)
+
     if not label:
         label = "result"
 
@@ -621,8 +626,8 @@ def save_result(original, cropped, effective, solid, shadowed, label, laser_engr
         shadowed_svg  = os.path.join("result", "%s-shadowed.svg"  % prefix)
         svg1_file     = os.path.join("result", "%s-1.svg"         % prefix)
         svg2_file     = os.path.join("result", "%s-2.svg"         % prefix)
-        gcode1_file   = os.path.join("result", "%s-1.ngc"         % prefix)
-        gcode2_file   = os.path.join("result", "%s-2.ngc"         % prefix)
+        gcode1_file   = os.path.join("result", "%s-1.nc"          % prefix)
+        gcode2_file   = os.path.join("result", "%s-2.nc"          % prefix)
 
         cv2.imwrite(original_png , original )
         cv2.imwrite(cropped_png  , cropped  )
@@ -630,18 +635,35 @@ def save_result(original, cropped, effective, solid, shadowed, label, laser_engr
         cv2.imwrite(solid_bmp    , solid    )
         cv2.imwrite(shadowed_bmp , shadowed )
 
-        os.system("potrace -i --tight -s --group --flat -o {} {}".format(svg1_file   , effective_bmp))
-        os.system("potrace    --tight -s --group --flat -o {} {}".format(solid_svg   , solid_bmp    ))
-        os.system("potrace -i --tight -s --group --flat -o {} {}".format(shadowed_svg, shadowed_bmp ))
+        if auto_scale:
+            if scale_keep_ratio:
+                h, w = effective.shape[:2]
+                w *= 25.4 / 96  # mm/px ( 25.4mm/inch / 96dpi )
+                h *= 25.4 / 96  # mm/px ( 25.4mm/inch / 96dpi )
+                aspect = min(float(scale_max_width) / w, float(scale_max_height) / h)
+                scaling_args = "-W {}mm -H {}mm".format(w * aspect, h * aspect)
+            else:
+                scaling_args = "-W {}mm -H {}mm".format(scale_max_width, scale_max_height)
+        else:
+            scaling_args = ""
 
-        ET.register_namespace("", "http://www.w3.org/2000/svg")
+        os.system("potrace -i --tight -s --group --flat {} -o {} {}".format(scaling_args, svg1_file   , effective_bmp))
+        os.system("potrace    --tight -s --group --flat {} -o {} {}".format(scaling_args, solid_svg   , solid_bmp    ))
+        os.system("potrace -i --tight -s --group --flat {} -o {} {}".format(scaling_args, shadowed_svg, shadowed_bmp ))
 
         merged_xml   = ET.parse(solid_svg   ).getroot()
         shadowed_xml = ET.parse(shadowed_svg).getroot()
 
-        for g in shadowed_xml.findall("svg:g"):
+        for g in merged_xml.findall("{http://www.w3.org/2000/svg}g"):
+            g.set("fill", "none")
+            g.set("stroke", "#000000")
+
+        for g in shadowed_xml.findall("{http://www.w3.org/2000/svg}g"):
+            g.set("fill", "none")
+            g.set("stroke", "#000000")
             merged_xml.append(g)
 
+        ET.register_namespace("", "http://www.w3.org/2000/svg")
         with open(svg2_file, "w") as svg:
             svg.write(ET.tostring(merged_xml))
 
@@ -652,7 +674,7 @@ def save_result(original, cropped, effective, solid, shadowed, label, laser_engr
             gcode.write("\n".join([str(x) for x in SVG(svg2_file).generate_gcode(laser_engraver)]))
 
         img_list[2] = ("", _get_message_pane("Saved successfully\nPress any key to return", original.shape[1], original.shape[0], font_size = 3, stroke_width = 3))
-    except BaseException:
+    except BaseException as e:
         img_list[2] = ("", _get_message_pane("Failed to save\nPress any key to return", original.shape[1], original.shape[0], font_size = 3, stroke_width = 3))
 
     cv2.imshow('result', _grid_images(img_list))
@@ -675,8 +697,8 @@ if __name__ == "__main__":
         "smoothed": True,               # gaussian-blurred edges
         "auto_scale": True,             # enable auto-scale
         "scale_keep_ratio": True,       # keep the original width/height ratio
-        "scale_max_width": 32,          # max width of the output
-        "scale_max_heigth": 18,         # max height of the output
+        "scale_max_width": 90,          # max width in millimeters of the output
+        "scale_max_height": 21,         # max height in millimeters of the output
         "filled": True,                 # filled with shadow lines
         "fill_min_sampling": 5,         # min interval in pixels
         "fill_max_sampling": 20,        # max interval in pixels
@@ -689,11 +711,11 @@ if __name__ == "__main__":
         "feed_speed": 200.0,            # feed speed in mm/min
         "travel_speed": 1500.0,         # travel speed in mm/min
         "spindle_speed": 255,           # PWM value: 0 - 255
-        "offset_x": None,               # Offset the whole graph to the specified position of x axis
-        "offset_y": None,               # Offset the whole graph to the specified position of y axis
-        "offset_z": None,               # Start at the specified position of z axis
-        "scaled_to_fit": False,         # Enlarge the whole graph to fit the table
-        "relative_mode": False,         # Generate the GCode paths with relative moves
+        "offset_x": 4.2,                # Offset in milimeters the whole graph to the specified position of x axis
+        "offset_y": 6.0,                # Offset in milimeters the whole graph to the specified position of y axis
+        "offset_z": None,               # Start at the specified position in milimeters of z axis
+        "scaled_to_fit": False,         # enlarge the whole graph to fit the table
+        "relative_mode": False,         # generate the GCode paths with relative moves
     }
     laser_engraver = Machine(**laser_options)
 
@@ -705,7 +727,8 @@ if __name__ == "__main__":
         original, cropped, label = result
         label, effective, solid, shadowed = build_image(original, cropped, label, **image_options)
         if label is not None:
-            save_result(original, cropped, effective, solid, shadowed, label, laser_engraver)
+            save_result(original, cropped, effective, solid, shadowed, label, laser_engraver, **image_options)
+
 
     cv2.destroyAllWindows()
 
